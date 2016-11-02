@@ -81,6 +81,12 @@ const void IOpenCl::Init()
 const void IOpenCl::Shutdown()
 {
 
+	for (auto& p : _programs)
+	{
+		clReleaseKernel(p.kernel);
+		clReleaseProgram(p.program);
+	}
+
 	clReleaseCommandQueue(_cmdQueue);
 	clReleaseContext(_context);
 
@@ -90,7 +96,7 @@ const void IOpenCl::Shutdown()
 const size_t IOpenCl::AddProgram(const char * path)
 {
 	// Create the program
-	cl_program program = CreateProgram(path,
+	cl_program program = _CreateProgram(path,
 		_context);
 
 	cl_int err;
@@ -99,12 +105,78 @@ const size_t IOpenCl::AddProgram(const char * path)
 
 	cl_kernel kernel = clCreateKernel(program, path, &err);
 	CL_ERR(err, "clCreateKernel");
-	_programs.push_back(kernel);
+	_programs.push_back({ kernel, program });
 
 	return _programs.size() - 1;
 
 }
-cl_program IOpenCl::CreateProgram(const char* path, cl_context context)
+const IOpenCl::Param IOpenCl::GetParamFromBuffer(uint32_t buffer)
+{
+	auto& find = _buffers.find(buffer);
+	if (find != _buffers.end())
+	{
+		Param ret = { sizeof(cl_mem), &(find->second) };
+		return ret;
+	}
+	throw "Buffer not found.";
+}
+const void IOpenCl::ExecuteProgram(size_t program, uint8_t numParam, const Param* param, cl_uint numDim, const size_t* globalWorkSize, const size_t* localWorkSize)
+{
+	cl_kernel& k = _programs[program].kernel;
+	cl_int err;
+	for (uint8_t i = 0; i < numParam; i++)
+	{
+		err = clSetKernelArg(k, i, param[i].byteSize, param[i].data);
+		CL_ERR(err, "clSetKernelArg");
+	}
+	
+	 err = clEnqueueNDRangeKernel(_cmdQueue, k, numDim, nullptr, globalWorkSize, localWorkSize, NULL, nullptr, nullptr);
+	 CL_ERR(err, "clEnqueueNDRangeKernel");
+
+	return void();
+}
+const size_t IOpenCl::CreateBuffer(size_t byteSize, cl_mem_flags flags, void* data)
+{
+	cl_int err;
+	cl_mem buff = clCreateBuffer(_context, flags, byteSize, data, &err);
+	CL_ERR(err, "clCreateBuffer");
+	
+	uint32_t nid = 0;
+	auto& find = _buffers.find(nid);
+	while (find != _buffers.end())
+	{		
+		nid++;
+		find = _buffers.find(nid);
+	}
+	_buffers[nid] = buff;
+
+	return nid;
+}
+const void IOpenCl::CopyHostToDevice(uint32_t buffer, size_t byteSize, void * data)
+{
+	auto& find = _buffers.find(buffer);
+	if (find != _buffers.end())
+	{
+		cl_int err = clEnqueueWriteBuffer(_cmdQueue, find->second, CL_TRUE, 0, byteSize, data, NULL, nullptr, nullptr);
+		CL_ERR(err, "clEnqueueWriteBuffer");
+	}
+	throw "Buffer not found.";
+}
+const void IOpenCl::CopyDeviceToHost(uint32_t buffer, size_t byteSize, void * data)
+{
+	auto& find = _buffers.find(buffer);
+	if (find != _buffers.end())
+	{
+		cl_int err = clEnqueueReadBuffer(_cmdQueue, find->second, CL_TRUE, 0,
+			byteSize,
+			data,
+			0, nullptr, nullptr);
+		CL_ERR(err, "clEnqueueReadBuffer");
+	}
+	
+	throw "Buffer not found.";
+}
+cl_program IOpenCl::_CreateProgram(const char* path, cl_context context)
 {
 
 	std::ifstream in(path);
